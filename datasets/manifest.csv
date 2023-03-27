@@ -1,0 +1,6 @@
+number,filename
+0,./datasets/train_part_0.conllu
+1,./datasets/train_part_1.conllu
+2,./datasets/train_part_2.conllu
+3,./datasets/train_part_3.conllu
+4,./datasets/train_part_4.conllu
