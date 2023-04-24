@@ -1,2 +1,11 @@
 prepare_data:
   split_number: 5
+  main_filename: './datasets/ru_syntagrus-ud-train.conllu'
+create_manifest:
+  directory: './datasets/train_parts'
+  csv_name: './datasets/manifest.csv'
+train:
+  lr: 5e-3
+  epochs: 5
+  batch_size: 64
+  model_name: './models/last_model.pth'

@@ -1,0 +1,35 @@
+stages:
+  prepare_data:
+    cmd: python split_dataset.py
+    deps:
+    - split_dataset.py
+    params:
+    - prepare_data.main_filename
+    - prepare_data.split_number
+    outs:
+    - datasets/train_parts
+
+  create_manifest:
+    cmd: python create_manifest.py
+    deps:
+      - create_manifest.py
+      - datasets/train_parts
+    params:
+      - create_manifest.directory
+      - create_manifest.csv_name
+    outs:
+      - datasets/manifest.csv
+
+  train:
+    cmd: python train_model.py
+    deps:
+      - datasets/train_parts
+      - datasets/manifest.csv
+      - train_model.py
+    params:
+      - train.model_name
+      - train.lr
+      - train.epochs
+      - train.batch_size
+    outs:
+      - models/last_model.pth
