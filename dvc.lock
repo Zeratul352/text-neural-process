@@ -1,0 +1,58 @@
+schema: '2.0'
+stages:
+  prepare_data:
+    cmd: python split_dataset.py
+    deps:
+    - path: split_dataset.py
+      md5: d24c80ee715f58791fbd31766f1fc454
+      size: 2236
+    params:
+      params.yaml:
+        prepare_data.main_filename: ./datasets/ru_syntagrus-ud-train.conllu
+        prepare_data.split_number: 5
+    outs:
+    - path: datasets/train_parts
+      md5: 75beedce136ebfd6ec69f35977bd11e2.dir
+      size: 40735503
+      nfiles: 5
+  create_manifest:
+    cmd: python create_manifest.py
+    deps:
+    - path: create_manifest.py
+      md5: 3c292a0befb881e21aab38f809ad3b55
+      size: 711
+    - path: datasets/train_parts
+      md5: 75beedce136ebfd6ec69f35977bd11e2.dir
+      size: 40735503
+      nfiles: 5
+    params:
+      params.yaml:
+        create_manifest.csv_name: ./datasets/manifest.csv
+        create_manifest.directory: ./datasets/train_parts
+    outs:
+    - path: datasets/manifest.csv
+      md5: 941a8b4e91f9a9eb03cc7c78644a3b7a
+      size: 247
+  train:
+    cmd: python train_model.py
+    deps:
+    - path: datasets/manifest.csv
+      md5: 941a8b4e91f9a9eb03cc7c78644a3b7a
+      size: 247
+    - path: datasets/train_parts
+      md5: 75beedce136ebfd6ec69f35977bd11e2.dir
+      size: 40735503
+      nfiles: 5
+    - path: train_model.py
+      md5: a51a04397661356045a5eadcb18e3c69
+      size: 8191
+    params:
+      params.yaml:
+        train.batch_size: 64
+        train.epochs: 5
+        train.lr: 0.005
+        train.model_name: ./models/last_model.pth
+    outs:
+    - path: models/last_model.pth
+      md5: 0e1fd6406f48a454898bc2f7c207d930
+      size: 192876
