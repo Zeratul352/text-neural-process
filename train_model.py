@@ -19,6 +19,17 @@ from dlnlputils.data import tokenize_corpus, build_vocabulary, \
 from dlnlputils.pipeline import train_eval_loop, predict_with_model, init_random_seed
 
 import dvc.api
+import mlflow
+import os
+import time
+
+import wandb
+
+exp_name = 'experiment_003'
+
+mlflow.set_tracking_uri('http://127.0.0.1:5000') # set up connection
+mlflow.set_experiment(exp_name) # set the experiment
+
 
 init_random_seed()
 params = dvc.api.params_show()
@@ -118,54 +129,107 @@ best_loss = float('inf')
 
 best_model = copy.deepcopy(single_token_model)
 
-for dataset_part in train_parts:
-    part_train = pyconll.load_from_file(dataset_part)
+with mlflow.start_run(run_name='training_epochs_5_batch_64'):
+    for dataset_part in train_parts:
+        part_train = pyconll.load_from_file(dataset_part)
+        single_token_model = SingleTokenPOSTagger(len(char_vocab), len(label2id), embedding_size=64, layers_n=3,
+                                                  kernel_size=3, dropout=0.3)
+        # MAX_PART_SENT_LEN = max(max(len(sent) for sent in part_train), max(len(sent_t) for sent_t in full_test))
+        # MAX_PART_ORIG_TOKEN_LEN = max(max(len(token.form) for sent in part_train for token in sent),
+        #                              max(len(token_t.form) for sent_t in full_test for token_t in sent_t))
+        # MAX_PART_ORIG_TOKEN_LEN = max(len(token.form) for sent in part_train for token in sent)
+        print('Наибольшая длина предложения в части', MAX_SENT_LEN)
+        print('Наибольшая длина токена в части', MAX_ORIG_TOKEN_LEN)
+        all_train_texts = [' '.join(token.form for token in sent) for sent in part_train]
+        print('\n'.join(all_train_texts[:10]))
+        train_char_tokenized = tokenize_corpus(all_train_texts, tokenizer=character_tokenize)
+        char_vocab, word_doc_freq = build_vocabulary(train_char_tokenized, max_doc_freq=1.0, min_count=5,
+                                                     pad_word='<PAD>')
+        print("Количество уникальных символов", len(char_vocab))
+        print(list(char_vocab.items())[:10])
+        UNIQUE_TAGS = ['<NOTAG>'] + sorted({token.upos for sent in part_train for token in sent if token.upos})
+        label2id = {label: i for i, label in enumerate(UNIQUE_TAGS)}
+        # label2id
+        train_inputs, train_labels = pos_corpus_to_tensor(part_train, char_vocab, label2id, MAX_SENT_LEN,
+                                                          MAX_ORIG_TOKEN_LEN)
+        train_dataset = TensorDataset(train_inputs, train_labels)
 
-    #MAX_PART_SENT_LEN = max(max(len(sent) for sent in part_train), max(len(sent_t) for sent_t in full_test))
-    #MAX_PART_ORIG_TOKEN_LEN = max(max(len(token.form) for sent in part_train for token in sent),
-    #                              max(len(token_t.form) for sent_t in full_test for token_t in sent_t))
-    #MAX_PART_ORIG_TOKEN_LEN = max(len(token.form) for sent in part_train for token in sent)
-    print('Наибольшая длина предложения в части', MAX_SENT_LEN)
-    print('Наибольшая длина токена в части', MAX_ORIG_TOKEN_LEN)
-    all_train_texts = [' '.join(token.form for token in sent) for sent in part_train]
-    print('\n'.join(all_train_texts[:10]))
-    train_char_tokenized = tokenize_corpus(all_train_texts, tokenizer=character_tokenize)
-    char_vocab, word_doc_freq = build_vocabulary(train_char_tokenized, max_doc_freq=1.0, min_count=5, pad_word='<PAD>')
-    print("Количество уникальных символов", len(char_vocab))
-    print(list(char_vocab.items())[:10])
-    UNIQUE_TAGS = ['<NOTAG>'] + sorted({token.upos for sent in part_train for token in sent if token.upos})
-    label2id = {label: i for i, label in enumerate(UNIQUE_TAGS)}
-    # label2id
-    train_inputs, train_labels = pos_corpus_to_tensor(part_train, char_vocab, label2id, MAX_SENT_LEN,
-                                                      MAX_ORIG_TOKEN_LEN)
-    train_dataset = TensorDataset(train_inputs, train_labels)
+        test_inputs, test_labels = pos_corpus_to_tensor(full_test, char_vocab, label2id, MAX_SENT_LEN,
+                                                        MAX_ORIG_TOKEN_LEN)
+        test_dataset = TensorDataset(test_inputs, test_labels)
+        with mlflow.start_run(run_name='loop_from_' + time.strftime("%H:%M:%S"), nested=True):
+            mlflow.log_param('dataset_name', dataset_part)
+            (current_val_loss,
+             current_single_token_model) = train_eval_loop(best_model,
+                                                           train_dataset,
+                                                           test_dataset,
+                                                           F.cross_entropy,
+                                                           lr=params['train']['lr'],  # 5e-3,
+                                                           epoch_n=params['train']['epochs'],  # 10,
+                                                           batch_size=params['train']['batch_size'],  # 64,
+                                                           device='cuda',
+                                                           early_stopping_patience=5,
+                                                           max_batches_per_epoch_train=500,
+                                                           max_batches_per_epoch_val=100,
+                                                           lr_scheduler_ctor=lambda
+                                                               optim: torch.optim.lr_scheduler.ReduceLROnPlateau(optim,
+                                                                                                                 patience=2,
+                                                                                                                 factor=0.5,
+                                                                                                                 verbose=True),
+                                                           experiment_name=exp_name)
+            single_token_pos_tagger = POSTagger(current_single_token_model, char_vocab, UNIQUE_TAGS, MAX_SENT_LEN, MAX_ORIG_TOKEN_LEN)
 
-    test_inputs, test_labels = pos_corpus_to_tensor(full_test, char_vocab, label2id, MAX_SENT_LEN, MAX_ORIG_TOKEN_LEN)
-    test_dataset = TensorDataset(test_inputs, test_labels)
+            test_sentences = [
+                'Мама мыла раму.',
+                'Косил косой косой косой.',
+                'Глокая куздра штеко будланула бокра и куздрячит бокрёнка.',
+                'Сяпала Калуша с Калушатами по напушке.',
+                'Пирожки поставлены в печь, мама любит печь.',
+                'Ведро дало течь, вода стала течь.',
+                'Три да три, будет дырка.',
+                'Три да три, будет шесть.',
+                'Сорок сорок'
+            ]
+            test_sentences_tokenized = tokenize_corpus(test_sentences, min_token_size=1)
+            # tags = best_model(test_sentences)
+            with open("./test_log.csv", 'w', encoding='utf-8', newline='') as f:
+                writer = csv.writer(f)
+                for sent_tokens, sent_tags in zip(test_sentences_tokenized, single_token_pos_tagger(test_sentences)):
+                    for tok, tag in zip(sent_tokens, sent_tags):
+                        writer.writerow([tok, tag])
 
-    (current_val_loss,
-     current_single_token_model) = train_eval_loop(best_model,
-                                                train_dataset,
-                                                test_dataset,
-                                                F.cross_entropy,
-                                                lr=params['train']['lr'],#5e-3,
-                                                epoch_n=params['train']['epochs'],#10,
-                                                batch_size=params['train']['batch_size'],#64,
-                                                device='cuda',
-                                                early_stopping_patience=5,
-                                                max_batches_per_epoch_train=500,
-                                                max_batches_per_epoch_val=100,
-                                                lr_scheduler_ctor=lambda
-                                                    optim: torch.optim.lr_scheduler.ReduceLROnPlateau(optim, patience=2,
-                                                                                                      factor=0.5,
-                                                                                                      verbose=True))
-    if current_val_loss < best_loss:
-        best_loss = current_val_loss
-        best_model = copy.deepcopy(current_single_token_model)
+            mlflow.log_artifact('./test_log.csv')
+            mlflow.log_artifact(params['train']['model_name'])
+
+        if current_val_loss < best_loss:
+            best_loss = current_val_loss
+            best_model = copy.deepcopy(current_single_token_model)
+
+    torch.save(best_model.state_dict(), params['train']['model_name'])#'./models/last_single_token_pos.pth')
+    single_token_pos_tagger = POSTagger(best_model, char_vocab, UNIQUE_TAGS, MAX_SENT_LEN, MAX_ORIG_TOKEN_LEN)
 
 
+    test_sentences = [
+        'Мама мыла раму.',
+        'Косил косой косой косой.',
+        'Глокая куздра штеко будланула бокра и куздрячит бокрёнка.',
+        'Сяпала Калуша с Калушатами по напушке.',
+        'Пирожки поставлены в печь, мама любит печь.',
+        'Ведро дало течь, вода стала течь.',
+        'Три да три, будет дырка.',
+        'Три да три, будет шесть.',
+        'Сорок сорок'
+    ]
+    test_sentences_tokenized = tokenize_corpus(test_sentences, min_token_size=1)
+    #tags = best_model(test_sentences)
+    with open("./test_log.csv", 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        for sent_tokens, sent_tags in zip(test_sentences_tokenized, single_token_pos_tagger(test_sentences)):
+            for tok, tag in zip(sent_tokens, sent_tags):
+                writer.writerow([tok, tag])
 
 
+    mlflow.log_artifact('./test_log.csv')
+    mlflow.log_artifact(params['train']['model_name'])
 
-torch.save(best_model.state_dict(), params['train']['model_name'])#'./models/last_single_token_pos.pth')
 

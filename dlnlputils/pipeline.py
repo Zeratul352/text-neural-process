@@ -6,6 +6,9 @@ import traceback
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+import mlflow
+import os
+import time
 
 
 def init_random_seed(value=0):
@@ -48,7 +51,8 @@ def train_eval_loop(model, train_dataset, val_dataset, criterion,
                     optimizer_ctor=None,
                     lr_scheduler_ctor=None,
                     shuffle_train=True,
-                    dataloader_workers_n=0):
+                    dataloader_workers_n=0,
+                    experiment_name="default_name"):
     """
     Цикл для обучения модели. После каждой эпохи качество модели оценивается по отложенной выборке.
     :param model: torch.nn.Module - обучаемая модель
@@ -70,6 +74,10 @@ def train_eval_loop(model, train_dataset, val_dataset, criterion,
         - среднее значение функции потерь на валидации на лучшей эпохе
         - лучшая модель
     """
+
+    mlflow.set_tracking_uri('http://127.0.0.1:5000')  # set up connection
+    mlflow.set_experiment(experiment_name)  # set the experiment
+
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     device = torch.device(device)
@@ -94,6 +102,12 @@ def train_eval_loop(model, train_dataset, val_dataset, criterion,
     best_epoch_i = 0
     best_model = copy.deepcopy(model)
 
+      # open new experiment run
+    #mlflow.log_artifact(os.path.abspath(__file__), 'source code')
+    mlflow.log_param('epochs', epoch_n)
+    mlflow.log_param('lr', lr)
+    mlflow.log_param('batch_size', batch_size)
+    #mlflow.log_metric('accuracy', 0.9)
     for epoch_i in range(epoch_n):
         try:
             epoch_start = datetime.datetime.now()
@@ -124,8 +138,9 @@ def train_eval_loop(model, train_dataset, val_dataset, criterion,
             print('Эпоха: {} итераций, {:0.2f} сек'.format(train_batches_n,
                                                            (datetime.datetime.now() - epoch_start).total_seconds()))
             print('Среднее значение функции потерь на обучении', mean_train_loss)
+            #with mlflow.start_run(run_name='mytest1'):  # open new experiment run
 
-
+            mlflow.log_metric('mean_train_loss', mean_train_loss)
 
             model.eval()
             mean_val_loss = 0
@@ -147,7 +162,7 @@ def train_eval_loop(model, train_dataset, val_dataset, criterion,
 
             mean_val_loss /= val_batches_n
             print('Среднее значение функции потерь на валидации', mean_val_loss)
-
+            mlflow.log_metric('mean_validation_loss', mean_val_loss)
             if mean_val_loss < best_val_loss:
                 best_epoch_i = epoch_i
                 best_val_loss = mean_val_loss
@@ -168,6 +183,8 @@ def train_eval_loop(model, train_dataset, val_dataset, criterion,
         except Exception as ex:
             print('Ошибка при обучении: {}\n{}'.format(ex, traceback.format_exc()))
             break
+
+
 
     return best_val_loss, best_model
 
